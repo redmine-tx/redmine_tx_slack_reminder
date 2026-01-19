@@ -1,0 +1,26 @@
+<div class="box tabular settings">
+  <p>
+    <%= content_tag :label, "전체 공지 슬랙 채널 ID" %>
+    <%= text_field_tag 'settings[tx_slack_reminder_general_channel_id]', 
+                       @settings['tx_slack_reminder_general_channel_id'], 
+                       :size => 50, 
+                       :placeholder => "예: C1234567890" %>
+    <em class="info">전체 공지용 슬랙 채널의 ID를 입력하세요.</em>
+  </p>
+  <p>
+  <%= content_tag :label, "슬랙 토큰" %>
+  <%= text_field_tag 'settings[tx_slack_reminder_token]', 
+                     @settings['tx_slack_reminder_token'], 
+                     :size => 50, 
+                     :placeholder => "예: xoxb-your-bot-token" %>
+  <em class="info">슬랙 토큰을 입력하세요.</em>
+</p>
+  <p>
+    <%= content_tag :label, "슬랙 웹훅 URL" %>
+    <%= text_field_tag 'settings[tx_slack_reminder_web_hook_url]', 
+                       @settings['tx_slack_reminder_web_hook_url'], 
+                       :size => 50, 
+                       :placeholder => "예: https://hooks.slack.com/services/TXXXXX/BXXXXX/XXXXXXXXXX" %>
+    <em class="info">슬랙 웹훅 URL을 입력하세요.</em>
+  </p>
+</div>
