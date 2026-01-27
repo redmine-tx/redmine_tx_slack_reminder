@@ -1103,8 +1103,9 @@ module TxReminderRefactored
 
   # 휴일 확인 함수
   def self.holiday_today?
-    # redmine_tx_more_calendar 플러그인을 사용하여 휴일 확인
-    return Holiday.holiday?(Date.today)
+    # redmine_tx_0_base의 공휴일 API를 사용하여 휴일 확인
+    return false unless TxBaseHelper::HolidayApi.available?
+    return TxBaseHelper::HolidayApi.holiday?(Date.today)
   end
 
   # 스케줄 알림 함수
