@@ -11,12 +11,16 @@ Redmine::Plugin.register :redmine_tx_slack_reminder do
   
   settings :default => {
     'tx_slack_reminder_general_channel_id' => nil,
-    'tx_slack_reminder_web_hook_url' => nil,
-    'tx_slack_reminder_token' => nil
+    'tx_slack_reminder_token' => nil,
+    'send_message_on_development_mode' => '0',
+    'dm_target_group_ids' => []
   }, :partial => 'settings/tx_slack_reminder'
 end
 
 Rails.application.config.after_initialize do
+  require_dependency File.expand_path('../lib/slack_rate_limiter.rb', __FILE__)
+  require_dependency File.expand_path('../lib/slack_user_mapper.rb', __FILE__)
+  require_dependency File.expand_path('../lib/slack_channel_mapper.rb', __FILE__)
   require_dependency File.expand_path('../lib/tx_reminder_refactored.rb', __FILE__)
 
     RedmineScheduler.register_task(
@@ -47,5 +51,14 @@ Rails.application.config.after_initialize do
       TxReminderRefactored.remind_main()
       Rails.logger.info "main 레드마인 알림 executed at #{Time.current}"
     end
-  
+
+    RedmineScheduler.register_task(
+      name: '개인별 DM 레드마인 알림',
+      description: '개인별 DM 레드마인 알림',
+      cron: '10 10 * * *'  # 매일 10시 10분
+    ) do
+      TxReminderRefactored.remind_everybody()
+      Rails.logger.info "개인별 DM 레드마인 알림 executed at #{Time.current}"
+    end
+
 end

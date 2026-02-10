@@ -143,8 +143,6 @@ module TxReminderRefactored
   # 공통 상수
   MAX_DATA_COUNT = 50
   MAXLENG = 100
-  #SLACK_WEBHOOK_URL = 'https://hooks.slack.com/services/TXXXXX/BXXXXX/XXXXXXXXXX'
-  USERNAME = '리마인더'
 
   # 글로벌 변수
   $str_today = ''
@@ -1135,26 +1133,26 @@ module TxReminderRefactored
     return holiday_today?
 
     reminder_field = GroupCustomField.find_by(name: 'reminder_slack_channel_id')
-    reminder_field = reminder_field ? Group.all.select { |group| 
+    reminder_field = reminder_field ? Group.all.select { |group|
       value = group.custom_field_value(reminder_field)
       value.present?
-    }.map { |g| 
-      { group: g, channel_id: g.custom_field_value(reminder_field) } 
+    }.map { |g|
+      { group: g, channel_id: g.custom_field_value(reminder_field) }
     } : []
 
-    reminder_field.each { |info |
-      config = {
-        'channel' => info[:channel_id],
-        'user_ids' => info[:group].users.pluck(:id),
-        'team_name' => info[:group].name,
-        'enabled_queries' => [:next_week_start_issues, :custom_overdue_new_issues, :delayed_issues],
-        'query_type' => :custom
+    SlackRateLimiter.run_in_background do
+      reminder_field.each { |info |
+        config = {
+          'channel' => info[:channel_id],
+          'user_ids' => info[:group].users.pluck(:id),
+          'team_name' => info[:group].name,
+          'enabled_queries' => [:next_week_start_issues, :custom_overdue_new_issues, :delayed_issues],
+          'query_type' => :custom
+        }
+
+        schedule_notification(config)
       }
-
-      # pp config
-
-      schedule_notification(config)
-    }
+    end
   end
 
   # 나중에 공통 모듈로 뺴던가 하자
@@ -1192,47 +1190,18 @@ module TxReminderRefactored
             }.to_json
           end
 
-    pp body
-
     request.body = body
-  
-    response = http.request(request)
 
-    pp response.code, response.body
+    response = SlackRateLimiter.send_with_throttle(http, request, channel_id)
 
     unless response.code == '200'
       Rails.logger.error "Slack message send error: #{response.code} #{response.body}"
     end
   end
 
-  # Slack 메시지 전송
+  # Slack 메시지 전송 (Bot Token 방식)
   def self.send_slack_message(msg)
-
     self.slack_message(msg)
-
-    return
-      
-    uri = URI(Setting.plugin_redmine_tx_slack_reminder['tx_slack_reminder_web_hook_url'])
-    http = Net::HTTP.new(uri.host, uri.port)
-    http.use_ssl = true
-
-    request = Net::HTTP::Post.new(uri)
-    request['Content-Type'] = 'application/json'
-    request.body = {
-      channel: Setting.plugin_redmine_tx_slack_reminder['tx_slack_reminder_general_channel_id'],
-      username: USERNAME,
-      blocks: [JSON.parse(msg)]
-    }.to_json
-
-    pp URI( Setting.plugin_redmine_tx_slack_reminder['tx_slack_reminder_web_hook_url'] ), Setting.plugin_redmine_tx_slack_reminder['tx_slack_reminder_general_channel_id'], USERNAME
-
-    begin
-      response = http.request(request)
-      puts "Slack response: #{response.code}"
-      puts response.body
-    rescue => error
-      warn "Slack 메시지 전송 실패: #{error}"
-    end
   end
 
   def self.remind_yesterday()
@@ -1244,7 +1213,6 @@ module TxReminderRefactored
     excluded_group_ids = TxBaseHelper.config_arr('e_group') || []
     user_ids = Group.all.select{ |group| !excluded_group_ids.include?(group.id) }.map { |g| g.users.select { |u| u.active? }.sort_by{ |u| u.name }.map { |u| u.id } }.flatten.uniq
 
-
     config = {
       'channel' => Setting.plugin_redmine_tx_slack_reminder['tx_slack_reminder_general_channel_id'],
       'user_ids' => user_ids,
@@ -1253,7 +1221,9 @@ module TxReminderRefactored
       'query_type' => :yesterday
     }
 
-    schedule_notification( config )    
+    SlackRateLimiter.run_in_background do
+      schedule_notification( config )
+    end
   end
 
   def self.remind_main()
@@ -1271,7 +1241,142 @@ module TxReminderRefactored
       'query_type' => :main
     }
 
-    schedule_notification( config )    
+    SlackRateLimiter.run_in_background do
+      schedule_notification( config )
+    end
+  end
+
+  # 개인별 DM 일감 알림
+  def self.remind_everybody()
+    today = Date.current
+    return if today.saturday? || today.sunday?
+    return if holiday_today?
+
+    # 설정에서 대상 그룹 조회
+    group_ids = Setting.plugin_redmine_tx_slack_reminder['dm_target_group_ids'] || []
+    group_ids = group_ids.map(&:to_i).reject(&:zero?)
+    return if group_ids.empty?
+
+    target_users = User.active
+    .joins('INNER JOIN groups_users ON groups_users.user_id = users.id')
+    .where('groups_users.group_id IN (?)', group_ids)
+    .distinct.to_a
+
+    target_user_ids = target_users.map(&:id)
+    dm_exclude_tracker_ids = (Tracker.sidejob_trackers_ids + Tracker.exception_trackers_ids).uniq
+
+    dm_exclude_status_ids = (IssueStatus.completed_ids + IssueStatus.implemented_ids + IssueStatus.discarded_ids + IssueStatus.postponed_ids).uniq
+
+    # 오늘 시작 또는 오늘 마감 일감
+    today_issues = Issue.joins(:assigned_to, :status)
+      .where('issues.created_on >= ?', ISSUE_CREATED_AFTER)
+      .where(Issue.arel_table[:start_date].eq(today).or(Issue.arel_table[:due_date].eq(today)))
+      .where.not(status_id: dm_exclude_status_ids)
+      .where(assigned_to_id: target_user_ids)
+      .where.not(tracker_id: dm_exclude_tracker_ids)
+
+    # 시작일 지났는데 아직 신규 상태인 일감
+    overdue_new_issues = Issue.joins(:assigned_to, :status)
+      .where('issues.created_on >= ?', ISSUE_CREATED_AFTER)
+      .where('start_date < ?', today)
+      .where.not(status_id: dm_exclude_status_ids)
+      .where(status_id: IssueStatus.new_ids)
+      .where(assigned_to_id: target_user_ids)
+      .where.not(tracker_id: dm_exclude_tracker_ids)
+
+    # 완료기한 초과 일감 (진행중/신규) — due_date < today 로 1일 초과부터 포함
+    overdue_issues = Issue.joins(:assigned_to, :status)
+      .where('issues.created_on >= ?', ISSUE_CREATED_AFTER)
+      .where('due_date < ?', today)
+      .where.not(status_id: dm_exclude_status_ids)
+      .where(status_id: IssueStatus.in_progress_ids + IssueStatus.new_ids)
+      .where(assigned_to_id: target_user_ids)
+      .where.not(tracker_id: dm_exclude_tracker_ids)
+
+    all_issues = (today_issues.to_a + overdue_new_issues.to_a + overdue_issues.to_a).uniq(&:id)
+    grouped = all_issues.group_by(&:assigned_to)
+
+    # 현재 진행 구간에 있는 일감이 있는 사용자 (start_date <= today <= due_date)
+    has_ongoing_user_ids = Issue
+      .where('issues.created_on >= ?', ISSUE_CREATED_AFTER)
+      .where('start_date <= ? AND due_date >= ?', today, today)
+      .where.not(status_id: dm_exclude_status_ids)
+      .where(assigned_to_id: target_user_ids)
+      .where.not(tracker_id: dm_exclude_tracker_ids)
+      .distinct.pluck(:assigned_to_id).to_set
+
+    vacation_available = TxBaseHelper::UserVacationApi.available? rescue false
+
+    SlackRateLimiter.run_in_background do
+      target_users.each do |user|
+        next if vacation_available && TxBaseHelper::UserVacationApi.on_vacation?(user, today)
+
+        issues = grouped[user] || []
+
+        start_issues  = issues.select { |i| i.start_date == today }
+        due_issues    = issues.select { |i| i.due_date == today }
+        new_overdue   = issues.select { |i| i.start_date && i.start_date < today && IssueStatus.is_new?(i.status_id) }
+        over_issues   = issues.select { |i| i.due_date && i.due_date < today && !IssueStatus.is_new?(i.status_id) }
+
+        no_today = start_issues.empty? && due_issues.empty? && !has_ongoing_user_ids.include?(user.id)
+        next if !no_today && issues.empty?
+
+        block = build_personal_dm_block(start_issues, due_issues, new_overdue, over_issues, no_today: no_today)
+        SlackUserMapper.send_dm_to_user(user, block)
+      end
+    end
+  end
+
+  def self.build_personal_dm_block(start_issues, due_issues, overdue_new_issues, overdue_issues, no_today: false)
+    elements = []
+    if no_today
+      elements << { 'type' => 'rich_text_section', 'elements' => [
+        { 'type' => 'emoji', 'name' => 'warning' },
+        { 'type' => 'text', 'text' => " 오늘 배정된 일감이 없습니다. 일정을 확인해 주세요.\n", 'style' => { 'bold' => true } }
+      ]}
+    end
+    if start_issues.any?
+      elements << section_header("오늘 시작 일감 #{start_issues.size}건")
+      start_issues.each { |i| elements << issue_bullet(i) }
+    end
+    if due_issues.any?
+      elements << section_header("오늘 마감 일감 #{due_issues.size}건")
+      due_issues.each { |i| elements << issue_bullet(i) }
+    end
+    if overdue_new_issues.any?
+      elements << section_header("시작일 경과 미착수 일감 #{overdue_new_issues.size}건")
+      overdue_new_issues.each { |i| elements << issue_bullet(i, show_start: true) }
+    end
+    if overdue_issues.any?
+      elements << section_header("완료기한 초과 일감 #{overdue_issues.size}건")
+      overdue_issues.each { |i| elements << issue_bullet(i, show_due: true) }
+    end
+    { 'type' => 'rich_text', 'elements' => elements }
+  end
+
+  def self.section_header(text)
+    { 'type' => 'rich_text_section', 'elements' => [
+      { 'type' => 'emoji', 'name' => 'date' },
+      { 'type' => 'text', 'text' => " #{text}\n", 'style' => { 'bold' => true } }
+    ]}
+  end
+
+  def self.issue_bullet(issue, show_due: false, show_start: false)
+    url = "#{Setting.protocol}://#{Setting.host_name}/issues/#{issue.id}"
+    parts = [
+      { 'type' => 'link', 'url' => url, 'text' => "##{issue.id} #{issue.subject}" },
+      { 'type' => 'text', 'text' => " (#{issue.status.name})" }
+    ]
+    if show_due && issue.due_date
+      days = (Date.current - issue.due_date).to_i
+      parts << { 'type' => 'text', 'text' => " — #{days}일 초과", 'style' => { 'bold' => true } }
+    end
+    if show_start && issue.start_date
+      days = (Date.current - issue.start_date).to_i
+      parts << { 'type' => 'text', 'text' => " — 시작일 #{days}일 경과", 'style' => { 'bold' => true } }
+    end
+    { 'type' => 'rich_text_list', 'style' => 'bullet',
+      'elements' => [{ 'type' => 'rich_text_section', 'elements' => parts }] }
   end
 
 =begin
