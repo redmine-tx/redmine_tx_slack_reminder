@@ -1332,7 +1332,7 @@ module TxReminderRefactored
     if no_today
       elements << { 'type' => 'rich_text_section', 'elements' => [
         { 'type' => 'emoji', 'name' => 'warning' },
-        { 'type' => 'text', 'text' => " 오늘 배정된 일감이 없습니다. 일정을 확인해 주세요.\n", 'style' => { 'bold' => true } }
+        { 'type' => 'text', 'text' => " 현재 진행 중인 일감이 없습니다. 팀 매니저 또는 PM에게 문의하여 일감 배정을 받아 주세요.\n", 'style' => { 'bold' => true } }
       ]}
     end
     if start_issues.any?
