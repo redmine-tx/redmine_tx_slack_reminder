@@ -22,6 +22,16 @@ Rails.application.config.after_initialize do
   require_dependency File.expand_path('../lib/slack_user_mapper.rb', __FILE__)
   require_dependency File.expand_path('../lib/slack_channel_mapper.rb', __FILE__)
   require_dependency File.expand_path('../lib/tx_reminder_refactored.rb', __FILE__)
+  require_dependency File.expand_path('../lib/milestone_dashboard_reminder.rb', __FILE__)
+
+    RedmineScheduler.register_task(
+      name: '마일스톤 대시보드 알림',
+      description: '마일스톤 대시보드 요약을 슬랙 채널에 전송',
+      cron: '40 9 * * *'  # 매일 9시 40분
+    ) do
+      MilestoneDashboardReminder.notify_channel_for_active_versions
+      Rails.logger.info "마일스톤 대시보드 알림 executed at #{Time.current}"
+    end
 
     RedmineScheduler.register_task(
       name: '그룹별 레드마인 알림',
