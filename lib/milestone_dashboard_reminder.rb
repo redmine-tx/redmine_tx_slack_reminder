@@ -132,12 +132,19 @@ class MilestoneDashboardReminder
       token
     end
 
-    # Find version IDs to send dashboard for.
-    # Uses each project's default_version if set and open.
+    # Find version ID to send dashboard for.
+    # Uses the configured project's default_version.
     def active_dashboard_version_ids
-      Project.active.has_module(:redmine_tx_milestone).map do |project|
-        project.default_version
-      end.compact.select { |v| v.status == 'open' }.map(&:id).uniq
+      project_id = Setting.plugin_redmine_tx_slack_reminder['milestone_dashboard_project_id']
+      return [] if project_id.blank?
+
+      project = Project.find_by(id: project_id)
+      return [] unless project&.active?
+
+      version = project.default_version
+      return [] unless version && version.status == 'open'
+
+      [version.id]
     end
   end
 end

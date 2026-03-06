@@ -13,7 +13,8 @@ Redmine::Plugin.register :redmine_tx_slack_reminder do
     'tx_slack_reminder_general_channel_id' => nil,
     'tx_slack_reminder_token' => nil,
     'send_message_on_development_mode' => '0',
-    'dm_target_group_ids' => []
+    'dm_target_group_ids' => [],
+    'milestone_dashboard_project_id' => nil
   }, :partial => 'settings/tx_slack_reminder'
 end
 

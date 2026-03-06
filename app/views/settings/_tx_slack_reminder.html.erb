@@ -26,6 +26,16 @@
   </p>
 
   <p>
+    <%= content_tag :label, "마일스톤 대시보드 대상 프로젝트" %>
+    <%= select_tag 'settings[milestone_dashboard_project_id]',
+                   options_for_select(
+                     [['-- 사용 안 함 --', '']] + Project.active.sorted.map { |p| [p.name, p.id.to_s] },
+                     @settings['milestone_dashboard_project_id']
+                   ) %>
+    <em class="info">마일스톤 대시보드 알림을 보낼 프로젝트를 선택하세요. 해당 프로젝트의 기본 버전에 대해 전송됩니다.</em>
+  </p>
+
+  <p>
     <%= content_tag :label, "개인 DM 대상 그룹" %>
     <%= select_tag 'settings[dm_target_group_ids][]',
                    options_for_select(
