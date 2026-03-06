@@ -27,8 +27,6 @@ class MilestoneDashboardReminder
       return if today.saturday? || today.sunday?
       return if TxReminderRefactored.holiday_today?
 
-      User.current = User.find(1) # admin context for permission
-
       version_ids = active_dashboard_version_ids
       return if version_ids.empty?
 
@@ -46,6 +44,8 @@ class MilestoneDashboardReminder
     def send_dashboard(version_id, channel_id)
       token = slack_token
       return false unless token
+
+      User.current = User.find(1) # admin context for full visibility
 
       payload = RedmineTxMilestone::SlackDashboardNotifier.build_dashboard_payload(version_id)
       return false unless payload
