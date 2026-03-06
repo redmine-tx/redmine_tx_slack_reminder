@@ -58,6 +58,9 @@ class MilestoneDashboardReminder
         upload_file_to_slack(token, channel_id, tmpfile.path)
       end
 
+      # Wait for Slack to finish rendering uploaded files before posting footer
+      sleep(2) if payload[:images].any?
+
       # Post footer (dashboard link)
       post_message(token, channel_id, payload[:footer]) if payload[:footer].present?
 
